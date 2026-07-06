@@ -6,14 +6,14 @@ import ast
 import time
 
 from diskcache import Cache
-from multiprocessing import Process
-from multiprocessing import shared_memory
+from multiprocess import Process
+from multiprocess import shared_memory
 
 from .single_basis import *
 from .pair_basis import *
 
-import multiprocessing as mp
-mp.set_start_method('fork')
+import multiprocess as mp
+#mp.set_start_method('fork')
 
 
 
