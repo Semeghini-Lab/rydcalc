@@ -1,6 +1,7 @@
 *.ipynb
 !tutorial.ipynb
 !optimization.ipynb
+!search.ipynb
 *.db
 *.so
 *.o
@@ -12,3 +13,5 @@
 .DS_Store
 *.json
 cached_matrix_elements
+*.lock
+*.h5

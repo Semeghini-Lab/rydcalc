@@ -7,9 +7,7 @@ from .analysis import *
 import h5py
 from pathlib import Path
 from multiprocess import Pool
-from multiprocess import Lock
-
-lock = Lock()
+from filelock import FileLock
 
 '''
 tool for searching over a large range of rydberg state configurations of two different atomic species
@@ -35,6 +33,8 @@ class rydberg_pair_search:
         self.Bz_range = Bz_range
         self.opts = opts
         self.save_file = save_file
+
+        self.dual_species = (self.atom1 != self.atom2)
 
         if Path(self.save_file).is_file():
             print('warning: save file aready exists. search may fail to overwrite previous data')
@@ -116,9 +116,11 @@ class rydberg_pair_search:
             state = self.atom2.get_state(tuple(qns))
 
     def generate_search_space(self, num_atomic_configs, num_field_configs):
-        # generates a search space with shape (num_atomic_configs, num_field_configs)
-        # returns list of tuples consisting of all configurations to search over
-        #   - [(atom1_state, atom2_state, Bz), ...]
+        # generates an atom1-atom2 search space with shape (num_atomic_configs, num_field_configs)
+        # generates 3 lists of tuples consisting of all configurations to search over
+        #   - atom1-atom2 interactions: [(atom1_state, atom2_state, Bz), ...]
+        #   - atom1-atom1 interactions: [(atom1_state, atom1_state, Bz), ...]
+        #   - atom2-atom2 interactions: [(atom2_state, atom2_state, Bz), ...]
         
         # sample uniformly from a1_states and a2_states with the same spacing
         num_a1_plus_num_a2 = np.sqrt(num_atomic_configs * (len(self.a1_states) + len(self.a2_states))**2 / (len(self.a1_states) * len(self.a2_states)))
@@ -132,22 +134,28 @@ class rydberg_pair_search:
         # sample uniformly from the field values
         field_values = np.linspace(self.Bz_range[0], self.Bz_range[-1]-1, num=num_field_configs, dtype=float)
 
-        self.search_space = []
+        self.search_space_a1a2 = []
+        self.search_space_a1a1 = set()
+        self.search_space_a2a2 = set()
 
         for i in indices_a1:
             for j in indices_a2:
                 for field_value in field_values:
-                    already_included = False
-                    for element in self.search_space:
-                        # dont include repeats for same atom interactions
+                    already_included_a1a2 = False
+                    for element in self.search_space_a1a2:
+                        # dont include repeats where the two states are swapped
                         if (element[0] == self.a2_states[j] and element[1] == self.a1_states[i] and element[2] == field_value):
-                            already_included = True
+                            already_included_a2a2 = True
                             break
-                    
-                    if not already_included:
-                        self.search_space.append((self.a1_states[i], self.a2_states[j], field_value))
 
-        return self.search_space
+                    if not already_included_a1a2:
+                        # add atom1 atom2 interaction to search space
+                        self.search_space_a1a2.append((self.a1_states[i], self.a2_states[j], field_value))
+
+                    if self.dual_species:
+                        # add atom1 and atom 2 intraspecies interaction to search space
+                        self.search_space_a1a1.add((self.a1_states[i], self.a1_states[i], field_value))
+                        self.search_space_a2a2.add((self.a2_states[j], self.a2_states[j], field_value))
     
     def run_single(self, configuration):
         # run rydcalc interaction analysis on a single pair of states and field
@@ -159,27 +167,41 @@ class rydberg_pair_search:
         pb.fill(pair(s1, s2), include_opts=self.opts)
         pb.computeHamiltonians(multipoles=[[1,1]])
 
-        pair_int = analysis_pair_interaction(s1, s2, include_opts=self.opts)
+        pair_int = analysis_pair_interaction(s1, s2, pb=pb, include_opts=self.opts)
         result = pair_int.run(rList_um=rList_um, th=0, Bz_Gauss=Bz)
 
         fig,ax = pair_int.pa_plot(include_plot_opts={'ov_norm': 'log', 'log_norm': [0.01, 1]})
         ax[-1].set_yscale('symlog')
 
         # save the results
-        with lock:
+        with FileLock(f'{self.save_file}.lock'):
             with h5py.File(self.save_file, 'a') as h5_file:
                 add_fig_to_h5(h5_file, fig, str(configuration), result)
     
     def run_search(self):
         # run the search, calculating the 
 
-        if self.search_space is None:
+        if self.search_space_a1a2 is None:
             print('Error, please define search space before running search')
             return
         
+        save_file_bac = self.save_file
+
         # otherwise start the search, running different parts in parallel
-        with Pool(processes=4) as pool:
-            results = pool.map(self.run_single, self.search_space)
+        with Pool(processes=4, maxtasksperchild=5) as pool:
+            self.save_file = self.save_file.replace('.h5', '_interspecies.h5') if self.dual_species else self.save_file
+            pool.map(self.run_single, self.search_space_a1a2)
+        
+        if self.dual_species:
+            self.save_file = self.save_file.replace('.h5', '_intraspecies_a1.h5')
+            with Pool(processes=4, maxtasksperchild=5) as pool:
+                pool.map(self.run_single, self.search_space_a1a1)
+
+            self.save_file = self.save_file.replace('.h5', '_intraspecies_a2.h5')
+            with Pool(processes=4, maxtasksperchild=5) as pool:
+                pool.map(self.run_single, self.search_space_a2a2)
+
+        self.save_file = save_file_bac
         
 
 
