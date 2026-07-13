@@ -14,6 +14,8 @@ import os
 import sys
 import shutil
 import unicodedata
+import subprocess
+import time
 
 '''
 tool for searching over a large range of rydberg state configurations of two different atomic species
@@ -43,6 +45,49 @@ def fix_libs():
         # bind the fix back to the module
         scipy.special.sph_harm = _patched_sph_harm
 
+# for use with slurm jobs
+def slurm_time_to_seconds(t):
+    '''
+    Convert SLURM time format to seconds.
+    Handles:
+      MM:SS
+      HH:MM:SS
+      D-HH:MM:SS
+    '''
+    days = 0
+
+    if '-' in t:
+        days, t = t.split('-')
+        days = int(days)
+
+    parts = list(map(int, t.split(':')))
+
+    if len(parts) == 2:
+        hours = 0
+        minutes, seconds = parts
+    elif len(parts) == 3:
+        hours, minutes, seconds = parts
+    else:
+        raise ValueError(f'Unexpected SLURM time format: {t}')
+
+    return days * 86400 + hours * 3600 + minutes * 60 + seconds
+
+
+def get_remaining_time():
+    result = subprocess.run(
+        ['squeue', '-h', '-j', os.environ['SLURM_JOB_ID'], '-o', '%L'],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    remaining = result.stdout.strip()
+
+    if not remaining:
+        return 0
+
+    return slurm_time_to_seconds(remaining)
+
 class rydberg_pair_search:
     def __init__(self, atom1, atom2, a1_n_range, a2_n_range, Bz_range, opts, opts_intraspecies=None, save_file='search_results.h5', logs_folder='search_logs', on_cluster=False):
         # INPUTS
@@ -65,6 +110,7 @@ class rydberg_pair_search:
         self.opts_intraspecies = opts_intraspecies
         self.save_file = save_file
         
+        self.on_cluster = on_cluster
         if on_cluster:
             self.allocated_cpus = min(int(os.environ.get('SLURM_CPUS_PER_TASK', 1)), 25)
         else:
@@ -151,6 +197,7 @@ class rydberg_pair_search:
         
         # create the logs folder if it doesn't exist
         os.makedirs(logs_folder, exist_ok=True)
+        self.logs_folder = logs_folder
 
         # get a list of completed calculations by looking through the logs
         self.completed_calculations = []
@@ -170,18 +217,27 @@ class rydberg_pair_search:
 
         print(self.completed_calculations)
 
-    def generate_search_space(self, num_atomic_configs, num_field_configs):
-        # generates an atom1-atom2 search space with shape (num_atomic_configs, num_field_configs)
+    def generate_search_space(self, num_atomic_configs, num_field_configs, partitions = 1):
+        # generates a search space with size as close to num_atomic_configs * num_field configs as possible
         # generates 3 lists of tuples consisting of all configurations to search over
         #   - atom1-atom2 interactions: [(atom1_state, atom2_state, Bz), ...]
         #   - atom1-atom1 interactions: [(atom1_state, atom1_state, Bz), ...]
         #   - atom2-atom2 interactions: [(atom2_state, atom2_state, Bz), ...]
-        
         # sample uniformly from a1_states and a2_states with the same spacing
-        num_a1_plus_num_a2 = np.sqrt(num_atomic_configs * (len(self.a1_states) + len(self.a2_states))**2 / (len(self.a1_states) * len(self.a2_states)))
 
-        num_from_a1 = int(len(self.a1_states) * num_a1_plus_num_a2 / (len(self.a1_states) + len(self.a2_states)))
-        num_from_a2 = int(len(self.a2_states) * num_a1_plus_num_a2 / (len(self.a1_states) + len(self.a2_states)))
+        s1 = len(self.a1_states)
+        s2 = len(self.a2_states)
+
+        s_ratio = s1/s2
+        n2 = (-(s_ratio+1)+np.sqrt((s_ratio+1)**2+4*num_atomic_configs*s_ratio))/(2*s_ratio)
+        n1 = s_ratio*n2
+
+        num_from_a1 = int(np.round(n1))
+        num_from_a2 = int(np.round(n2))
+
+        print(f'search space generated with size {num_from_a1*num_from_a2 + num_from_a1 + num_from_a2}')
+
+        actual_atomic_configs = num_from_a1 + num_from_a2 + (num_from_a1*num_from_a2)
 
         indices_a1 = np.linspace(0, len(self.a1_states) - 1, num=num_from_a1, dtype=int)
         indices_a2 = np.linspace(0, len(self.a2_states) - 1, num=num_from_a2, dtype=int)
@@ -189,34 +245,51 @@ class rydberg_pair_search:
         # sample uniformly from the field values
         field_values = np.linspace(self.Bz_range[0], self.Bz_range[-1]-1, num=num_field_configs, dtype=float)
 
-        self.search_space_a1a2 = []
-        self.search_space_a1a1 = set()
-        self.search_space_a2a2 = set()
+        search_space_a1a2 = []
+        search_space_a1a1 = set()
+        search_space_a2a2 = set()
 
+        blank_counter = 0 # for keeping track of blank entries added to the search space to account for already calculated interactions
         for i in indices_a1:
             for j in indices_a2:
                 for field_value in field_values:
                     already_included_a1a2 = False
-                    for element in self.search_space_a1a2:
+                    for element in search_space_a1a2:
                         # dont include repeats where the two states are swapped
-                        if (element[0] == self.a2_states[j] and element[1] == self.a1_states[i] and element[2] == field_value):
+                        if not(type(element) is str) and (element[0] == self.a2_states[j] and element[1] == self.a1_states[i] and element[2] == field_value):
                             already_included_a2a2 = True
                             break
 
                     config = (self.a1_states[i], self.a2_states[j], field_value)
-                    if not already_included_a1a2 and not str(config) in self.completed_calculations:
-                        # add atom1 atom2 interaction to search space
-                        self.search_space_a1a2.append(config)
+                    if not already_included_a1a2:
+                        if str(config) in self.completed_calculations:
+                            search_space_a1a2.append(f'blank{blank_counter}')
+                            blank_counter += 1
+                        else:
+                            # add atom1 atom2 interaction to search space
+                            search_space_a1a2.append(config)
 
-                    if self.dual_species:
-                        config11 = (self.a1_states[i], self.a1_states[i], field_value)
-                        config22 = (self.a2_states[j], self.a2_states[j], field_value)
-                        # add atom1 and atom 2 intraspecies interaction to search space
-                        if not str(config11) in self.completed_calculations:
-                            self.search_space_a1a1.add(config11)
+                    config11 = (self.a1_states[i], self.a1_states[i], field_value)
+                    config22 = (self.a2_states[j], self.a2_states[j], field_value)
+                    # add atom1 and atom 2 intraspecies interaction to search space
+                    if not str(config11) in self.completed_calculations:
+                        search_space_a1a1.add(config11)
+                    else:
+                        search_space_a1a1.add(f'blank{blank_counter}')
+                        blank_counter += 1
 
-                        if not str(config22) in self.completed_calculations:
-                            self.search_space_a2a2.add(config22)
+                    if not str(config22) in self.completed_calculations:
+                        search_space_a2a2.add(config22)
+                    else:
+                        search_space_a2a2.add(f'blank{blank_counter}')
+                        blank_counter += 1
+
+        print(f'there are {blank_counter} entries in search space which have already been computed!')
+
+        # partition the search space into [partitions] chunks
+        self.search_space_a1a2 = np.array_split( np.array(search_space_a1a2, dtype=object), partitions)
+        self.search_space_a1a1 = np.array_split(np.array(list(search_space_a1a1), dtype=object), partitions)
+        self.search_space_a2a2 = np.array_split(np.array(list(search_space_a2a2), dtype=object), partitions)    
     
     def run_single(self, configuration, save_file):
         fix_libs()
@@ -228,7 +301,7 @@ class rydberg_pair_search:
         log_filename = re.sub(r'[^a-zA-Z0-9._-]', '_', log_filename)
         log_filename = log_filename.strip(' ._-')
 
-        with open(f'search_logs/{log_filename}.log', 'w') as f:
+        with open(f'{self.logs_folder}/{log_filename}.log', 'w') as f:
             sys.stdout = f
 
             # run rydcalc interaction analysis on a single pair of states and field
@@ -243,8 +316,16 @@ class rydberg_pair_search:
                 opts = self.opts
 
             start = time.perf_counter()
+
+            print("entered", flush=True)
+
+            print("before pb", flush=True)
             pb = pair_basis_pre_computation()
+
+            print("before fill", flush=True)
             pb.fill(pair(s1, s2), include_opts=opts)
+            
+            print("before computeHamiltonians", flush=True)
             pb.computeHamiltonians(multipoles=[[1,1]])
             end = time.perf_counter()
 
@@ -264,7 +345,7 @@ class rydberg_pair_search:
             start = time.perf_counter()
             with FileLock(f'{save_file}.lock'):
                 with h5py.File(save_file, 'a') as h5_file:
-                    add_fig_to_h5(h5_file, fig, str(configuration), result)
+                    add_fig_to_h5(h5_file, fig, str(configuration), result, opts)
             end = time.perf_counter()
 
             print(f'Saved results in {end-start} s')
@@ -274,7 +355,7 @@ class rydberg_pair_search:
         
         sys.stdout = original_stdout
     
-    def run_search(self):
+    def run_search(self, on_partition=0, channels=['a1a1', 'a1a2', 'a2a2']):
         # run the search over entire search space
 
         if self.search_space_a1a2 is None:
@@ -284,20 +365,30 @@ class rydberg_pair_search:
         # otherwise start the search, running different parts in parallel
         print('starting search...')
         
-        if self.dual_species:
-            with Pool(processes=self.allocated_cpus, maxtasksperchild=5) as pool:
+        with Pool(processes=self.allocated_cpus, maxtasksperchild=5) as pool:
+            if self.dual_species:
                 sf12 = self.save_file.replace('.h5', '_interspecies.h5')
                 sf11 = self.save_file.replace('.h5', '_intraspecies_a1.h5')
                 sf22 = self.save_file.replace('.h5', '_intraspecies_a2.h5')
-                search_args = [(config, sf12) for config in self.search_space_a1a2] + \
-                            [(config, sf11) for config in self.search_space_a1a1] + \
-                            [(config, sf22) for config in self.search_space_a2a2]
-                pool.starmap(self.run_single, search_args)
+                search_args = [(tuple(config), sf12) for config in self.search_space_a1a2[on_partition] if not(type(config) is str) and 'a1a2' in channels] + \
+                            [(tuple(config), sf11) for config in self.search_space_a1a1[on_partition] if not(type(config) is str) and 'a1a1' in channels] + \
+                            [(tuple(config), sf22) for config in self.search_space_a2a2[on_partition] if not(type(config) is str) and 'a2a2' in channels]
+                result = pool.starmap_async(self.run_single, search_args)
         
-        else:
-            search_args = [(config, self.save_file) for config in self.search_space_a1a2]
-            pool.starmap(self.run_single, search_args)
-        
+            else:
+                search_args = [(tuple(config), self.save_file) for config in self.search_space_a1a2[on_partition] if not(type(config) is str)]
+                result = pool.starmap_async(self.run_single, search_args)
 
+            print('started pool...')
+            while not result.ready():
+                remaining = get_remaining_time() if self.on_cluster else 1e10
+
+                if remaining < 300:
+                    print('Less than 5 minutes remaining. Terminating pool.')
+                    pool.terminate()
+                    pool.join()
+                    break
+
+                time.sleep(30)
 
 

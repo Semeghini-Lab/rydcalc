@@ -5,15 +5,25 @@ import numpy as np
 import os
 import io
 from PIL import Image
+import dill
 
 # saves fig and calculated interaction coefficients to h5 file
-def add_fig_to_h5(h5_file, fig, fig_name, coefficients):
+def add_fig_to_h5(h5_file, fig, fig_name, coefficients, opts):
     if f'{fig_name}_coefficients' in h5_file:
         del h5_file[f'{fig_name}_coefficients']
 
     h5_file.create_dataset(
         f'{fig_name}_coefficients',
         data = coefficients
+    )
+
+    opts_str = dill.dumps(opts)
+    if f'{fig_name}_opts' in h5_file:
+        del h5_file[f'{fig_name}_opts']
+
+    h5_file.create_dataset(
+        f'{fig_name}_opts',
+        data = np.void(opts_str),
     )
    
     # store figure image as pre-compressed byte-array
@@ -38,11 +48,15 @@ def load_fig_from_h5(h5_file, fig_name):
     coef_dataset = h5_file[f'{fig_name}_coefficients']
     coef_array = coef_dataset[:] # [c6d, c6e, c3d, c3d]
 
+    opts_dataset = h5_file[f'{fig_name}_opts']
+    opts = dill.loads((opts_dataset[()]).tobytes())
+
     # load the plot
     binary_data = h5_file[fig_name][()]
     image_stream = io.BytesIO(binary_data)
     fig = Image.open(image_stream)
 
-    return coef_array, fig
+    return fig, coef_array , opts
+
 
 

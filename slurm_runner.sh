@@ -5,14 +5,22 @@
 
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=26
-#SBATCH --mem=990G
-#SBATCH --time=2:00:00
+#SBATCH --partition=test
+#SBATCH --cpus-per-task=30
+#SBATCH --mem=990GB
+#SBATCH --time=1:35:00
 
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
 
 module purge
-module load python/3.11
+module load python
 
-source ~/venvs/rydberg/bin/activate
+source activate rydcalc
 
+
+cp -r /n/netscratch/giuliasemeghini_lab/Lab/yizhu/cached_matrix_elements /scratch/cached_matrix_elements
 python Yb_Rb_search.py
+cp -r /scratch/cached_matrix_elements /n/netscratch/giuliasemeghini_lab/Lab/yizhu/cached_matrix_elements

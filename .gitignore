@@ -16,3 +16,4 @@ cached_matrix_elements
 *.lock
 *.h5
 search_logs/*
+logs

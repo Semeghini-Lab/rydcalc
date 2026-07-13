@@ -4,6 +4,7 @@
 import json
 import ast
 import time
+import os
 
 from diskcache import Cache
 from multiprocess import Process
@@ -114,7 +115,8 @@ _cache = None
 def get_cache():
     global _cache
     if _cache is None:
-        _cache = Cache('cached_matrix_elements')
+        _cache = Cache(os.path.join('/scratch/', 'cached_matrix_elements'))
+        #_cache = Cache('cached_matrix_elements')
     return _cache
 
 class pair_basis_pre_computation(pair_basis):
