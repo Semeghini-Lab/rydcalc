@@ -15,6 +15,7 @@ further introspection
 #from rydcalc import *
 from .single_basis import *
 from .pair_basis import *
+from .pre_computation import *
 
 from rydcalc import * # to get environment
 
@@ -25,7 +26,7 @@ from tqdm import tqdm
 
 class analysis:
     pass
-        
+
 
 class analysis_stark(analysis):
     """ Example class for performing an analysis of the Stark shift. This function constructs
@@ -41,22 +42,22 @@ class analysis_stark(analysis):
 
         The function sets up the basis from the MQDT model, computes the Hamiltonian, and prepares for the Stark shift analysis.
         """
-        
+
         self.opts = {'dn': 5,'dl': 5,'dm': 5,'dipole_allowed': False}
-        
+
         for k,v in include_opts.items():
             self.opts[k] = v
-        
+
         self.sb = single_basis()
         self.sb.fill(s1,include_opts = self.opts)
         self.sb.compute_hamiltonian()
-        
+
     def quad_fit(self,e,lin,quad):
         return e*lin + e**2 * quad
 
     def pure_quad_fit(self,e,quad):
         return e**2 * quad
-        
+
     def run(self,Bz_Gauss=0,Ez_list_Vcm = np.arange(0,1,0.1),plot=False,silence = False,diamagnetism = False):
         """
         Run the Stark shift analysis for a range of electric fields.
@@ -69,77 +70,77 @@ class analysis_stark(analysis):
         This method computes the energies and overlaps for each electric field in Ez_list_Vcm,
         fits the quadratic Stark coefficient, and optionally plots the results.
         """
-        
+
         self.env = environment(Bz_Gauss=Bz_Gauss,Ez_Vcm = 0, diamagnetism = diamagnetism)
         self.Ez_list_Vcm = Ez_list_Vcm
-        
+
         self.energies = []
         self.energiesAll = []
         self.overlaps = []
-        
+
         self.en0All = self.sb.compute_energies(self.env)
         self.en0 = self.en0All[0,0]
 
-        self.evAll = []        
-        
+        self.evAll = []
+
         for ez in tqdm(self.Ez_list_Vcm,disable=silence):
-            
+
             self.env.Ez_Vcm = ez
-            
+
             ret = self.sb.compute_energies(self.env)
-    
+
             self.energiesAll.append(self.sb.es - self.en0)
 
             self.evAll.append(self.sb.ev)
-    
+
             self.energies.append(ret[:,0] - self.en0)
             self.overlaps.append(ret[:,1])
-    
+
         self.energies = np.real(np.array(self.energies))
         self.overlaps = np.real(np.array(self.overlaps))
         self.energiesAll = np.real(np.array(self.energiesAll))
         self.evAll = np.array(self.evAll)
-        
+
         self.starkFits = []
-        
+
         for ii in range(len(self.sb.highlight)):
             p0quad = self.energies[-1,ii]/self.Ez_list_Vcm[-1]**2
             popt,pcov = sp.optimize.curve_fit(self.quad_fit,self.Ez_list_Vcm,self.energies[:,ii],p0=(0,p0quad))
             # fitting on a log scale does better when the r range is large, although it's not clear
             #popt,pcov = sp.optimize.curve_fit(lambda r,c6,c3: np.log(intfn(np.exp(r),c6,c3)),np.log(rumList[:]),np.log(np.real(energies[:,ii])),p0=(1e9,1e7))
             self.starkFits.append(popt)
-        
+
         if plot:
-            
+
             xlabel = 'Electric Field [V/cm]'
-            
+
             plt.figure(figsize=(12,4))
             plt.subplot(1,2,1)
-    
+
             for ii in range(len(self.sb.highlight)):
                 plt.plot(self.Ez_list_Vcm,self.energies[:,ii]*1e-6,'v',color='C'+str(ii),label=repr(self.sb.highlight[ii][:1]))
                 plt.plot(self.Ez_list_Vcm,self.quad_fit(self.Ez_list_Vcm,*self.starkFits[ii])*1e-6,'-',color='C'+str(ii))
-    
+
             plt.xlabel(xlabel)
             plt.ylabel('Energy [MHz]')
             plt.legend()
             #plt.ylim([-10,10])
             plt.grid(axis='both')
-    
+
             plt.subplot(1,2,2)
-    
+
             for ii in range(len(self.sb.highlight)):
                 plt.plot(self.Ez_list_Vcm,self.overlaps[:,ii],'-',label=repr(self.sb.highlight[ii][:1]))
-    
+
             plt.xlabel(xlabel)
             plt.ylabel('Overlap')
             #plt.legend()
             #plt.yscale('log')
             plt.ylim([-0.1,1.2])
             plt.grid(axis='both')
-        
+
         return self.starkFits
-    
+
     def plot_stark_map(self,include_plot_opts ={}):
         """
         Plots the Stark map for the system within a specified energy range.
@@ -159,10 +160,10 @@ class analysis_stark(analysis):
         """
 
         # fig,ax = plt.subplots(1,1,figsize=(4,4))
-        
+
         # for ii in range(len(self.Ez_list_Vcm)):
         #     ax.plot(self.Ez_list_Vcm[ii]*np.ones_like(self.energiesAll[ii]),self.energiesAll[ii]*1e-6,'.',color='gray')
-            
+
         # for ii in range(len(self.sb.highlight)):
         #     ax.plot(self.Ez_list_Vcm,self.energies[:,ii]*1e-6,'v',color='C'+str(ii),label=repr(self.sb.highlight[ii][:1]))
         #     ax.plot(self.Ez_list_Vcm,self.quad_fit(self.Ez_list_Vcm,*self.starkFits[ii])*1e-6,'-',color='C'+str(ii))
@@ -190,7 +191,7 @@ class analysis_stark(analysis):
 
         minE = 0
         maxE = 0
-    
+
         fig, ax = plt.subplots(1,1,figsize=(4,4))
 
         cmap0 = matplotlib.colors.LinearSegmentedColormap.from_list('testCmap', colorschemes[self.plot_opts["highlight_idx"] % len(colorschemes)], N=256)
@@ -228,7 +229,7 @@ class analysis_stark(analysis):
 
         sc = ax.scatter(Flist[order], Elist[order], s=self.plot_opts["s"], c=ov[order], cmap=cmap0,norm = norm)
         ax.clb = fig.colorbar(sc, label=r'Overlap', ticks=[0, 0.2, 0.4, 0.6, 0.8, 1],location = self.plot_opts['cb_loc'])
-        
+
         if self.plot_opts["show_fit"]:
             for ii in range(len(self.sb.highlight)):
                 ax.plot(self.Ez_list_Vcm,self.quad_fit(self.Ez_list_Vcm,*self.starkFits[ii])*1e-6,'-',color='C'+str(ii))
@@ -242,7 +243,7 @@ class analysis_stark(analysis):
 
         return fig,ax
 
-    
+
 class analysis_pair_interaction(analysis):
     """
     Class for analyzing pair interactions in Rydberg atoms.
@@ -264,7 +265,7 @@ class analysis_pair_interaction(analysis):
         evAll (list): List of all eigenvalues computed.
         en0 (float): The initial energy computed without interactions.
     """
-    def __init__(self,s1,s2=None,include_opts={},pb=None,multipoles=[[1,1]]):
+    def __init__(self,s1,s2=None,include_opts={},pb=None,multipoles=[[1,1]], a1_precomputed_me=None, a2_precomputed_me=None):
         """
         Initializes the analysis_pair_interaction class.
 
@@ -283,37 +284,41 @@ class analysis_pair_interaction(analysis):
             s2 (State): The second state in the pair.
             pb (pair_basis): The pair basis used for the calculations.
         """
+
+        # options:
+        # - dn is the change in the principle quantum number
+        # - dl is change over angular momentum quantum number
+        # - dm is change over magnetic quantum number
         self.opts = {'dn': 2,'dl': 2,'dm': 1,'dipole_allowed': False}
-        
+
         for k,v in include_opts.items():
             self.opts[k] = v
-        
+
         self.s1 = s1
-        
+
         if s2 is None:
             self.s2 = s1
         else:
             self.s2 = s2
-            
+
         if pb is None:
-        
             self.pb = pair_basis()
             self.pb.fill(pair(self.s1,self.s2),include_opts=self.opts)
 
             print("Basis size: " + str(len(self.pb.pairs)))
 
-            self.pb.computeHamiltonians(multipoles=multipoles)
+            self.pb.computeHamiltonians(multipoles=multipoles, a1_precomputed_me=a1_precomputed_me, a2_precomputed_me=a2_precomputed_me)
         else:
             # for convenience when developing, allow this to be passed in to skip computation
             self.pb = pb
 
-        
+
     def intfn(self,r,c6,c3):
         return c6/r**6 + c3/r**3
 
     def c3fn(self,r,C3k,det,Sk):
         return - det / (2*np.pi)*(1-np.sqrt(1+((4*C3k**2*Sk)/((det/(2*np.pi))**2*r**6))))
-        
+
     def run(self,Bz_Gauss = 0, Ez_Vcm = 0, th=np.pi/2, phi=0, rList_um = np.arange(5,10,1),skip_fits = False,silence = False, diamagnetism = False):
         """
         Runs the analysis for the Rydberg atom interactions under specified conditions: distance, interatomic angle, E and B fields.
@@ -332,49 +337,50 @@ class analysis_pair_interaction(analysis):
         Returns:
             [c6d, c6e, c3d, c3d] vector of fitted interaction coefficients for the desired pair states, in units of Hz*um^6 and Hz*um^3 as appropriate.
         """
-        
+
+        total_start = time.perf_counter()
+
         self.env = environment(Bz_Gauss = Bz_Gauss, Ez_Vcm = Ez_Vcm, diamagnetism = diamagnetism)
 
         self.rList_um = rList_um
         self.th = th
         self.phi = phi
-    
+
         self.energies = []
         self.energiesAll = []
         self.overlaps = []
         self.indices = []
-        
+
         self.evAll = []
-    
+
         self.en0 = self.pb.computeHtot(self.env,0,th=self.th,phi=self.phi,interactions=False)[0,0]
-    
-        for rum in tqdm(self.rList_um, disable = silence):
-            
-            ret = self.pb.computeHtot(self.env,rum,th=self.th,phi=self.phi,interactions=True)
-    
+
+        for run in tqdm(self.rList_um, disable = silence):
+            ret = self.pb.computeHtot(self.env,run,th=self.th,phi=self.phi,interactions=True)
+
             self.energiesAll.append(self.pb.es - self.en0)
             self.evAll.append(self.pb.ev)
-    
+
             self.energies.append(ret[:,0] - self.en0)
             self.overlaps.append(ret[:,1])
             self.indices.append(ret[:,2])
-    
+
         self.energies = np.array(self.energies)
         self.overlaps = np.array(self.overlaps)
         self.energiesAll = np.array(self.energiesAll)
         self.evAll = np.array(self.evAll)
-        
+
         if skip_fits:
             return
-        
+
         self.interactionFits = []
-        
+
         for ii in range(len(self.pb.highlight)):
             popt,pcov = sp.optimize.curve_fit(self.intfn,self.rList_um,np.real(self.energies[:,ii]),p0=(2e5,1e9))#,sigma = np.abs(np.real(self.energies[:,ii]))
             # fitting on a log scale does better when the r range is large, although it's not clear
             #popt,pcov = sp.optimize.curve_fit(lambda r,c6,c3: np.log(intfn(np.exp(r),c6,c3)),np.log(rumList[:]),np.log(np.real(energies[:,ii])),p0=(1e9,1e7))
             self.interactionFits.append(popt)
-        
+
         if len(self.interactionFits) > 1:
             c6d = (self.interactionFits[0][0] + self.interactionFits[1][0])/2
             c6e = (self.interactionFits[0][0] - self.interactionFits[1][0])/2
@@ -385,12 +391,15 @@ class analysis_pair_interaction(analysis):
             c6e = 0
             c3d = self.interactionFits[0][1]
             c3e = 0
-                    
+
         return np.array([c6d,c6e,c3d,c3e])
-    
-    
-    def pa_plot(self,include_plot_opts ={}):
+
+
+    def pa_plot(self,include_plot_opts ={}, sample_r=[]):
         """ Plot the results of the pair interaction analysis, including energy shifts and overlaps with asymptotic pair state. """
+
+        # MODIFICATION: populate sample_r with a list of radial separations at which to sample the energy of the highest overlap state
+        #   - the resulting list of energies is stored as self.sampled_energies
 
         self.plot_opts = {"ov_norm": 'linear',"s":5,"lin_norm":[0,1],"log_norm":[0.1,1],"gamma":0.5,"show_overlap": False,'cb_loc':'right','special_colors':None,'highlight_idx':0}
         self.overlapsAll = []
@@ -400,9 +409,9 @@ class analysis_pair_interaction(analysis):
 
 
         if self.plot_opts["show_overlap"] == True:
-            fig,axs = plt.subplots(1,3,figsize=(12,4),gridspec_kw={'wspace':0.3})
+            fig,axs = plt.subplots(1,2,figsize=(12,4),gridspec_kw={'wspace':0.3})
         else:
-            fig, axs = plt.subplots(1, 2, figsize=(12, 4), gridspec_kw={'wspace': 0.3})
+            fig, axs = plt.subplots(1, 1, figsize=(12, 4), gridspec_kw={'wspace': 0.3})
 
 
         if self.plot_opts["special_colors"] == None:
@@ -410,40 +419,25 @@ class analysis_pair_interaction(analysis):
             colorschemes = [['#DDDDDD', '#CC3311'], ['#DDDDDD', '#0077BB'], ['#DDDDDD', '#EE7733'], ['#DDDDDD', '#009988'], ['#DDDDDD', '#EE3377'], ['#DDDDDD', '#33BBEE']]
         else:
             colorschemes = self.plot_opts["special_colors"]
-        
-        for ii in range(len(self.pb.highlight)):
-            posidx = np.argwhere(self.energies[:,ii] >=0)
-            negidx = np.argwhere(self.energies[:,ii] < 0)
-            axs[0].plot(self.rList_um[posidx],np.abs(self.energies[posidx,ii])*1e-6,'o',color=colorschemes[ii % len(colorschemes)][1],label=repr(self.pb.highlight[ii][:2]))
-            axs[0].plot(self.rList_um[negidx],np.abs(self.energies[negidx,ii])*1e-6,'o',color=colorschemes[ii % len(colorschemes)][1])
-            #axs[0].plot(self.rList_um,np.abs(self.intfn(self.rList_um,*self.interactionFits[ii]))*1e-6,'-',color='C'+str(ii))
-    
-        axs[0].set_xlabel(r'$R$ ($\mu$m)')
-        axs[0].set_ylabel(r'Pair Energy ($h\cdot$MHz)')
-        #axs[0].legend()
-        axs[0].set_xscale('log')
-        axs[0].set_yscale('log')
-        #axs[0].set_ylim([-10,10])
-        axs[0].grid(axis='both')
 
         if self.plot_opts["show_overlap"] == True:
             for ii in range(len(self.pb.highlight)):
-                axs[1].plot(self.rList_um,self.overlaps[:,ii],'-',label=repr(self.pb.highlight[ii][:1]))
+                axs[0].plot(self.rList_um,self.overlaps[:,ii],'-',label=repr(self.pb.highlight[ii][:1]))
 
-            axs[1].set_xlabel(r'$R$ ($\mu$m)')
-            axs[1].set_ylabel(r'Overlap')
+            axs[0].set_xlabel(r'$R$ ($\mu$m)')
+            axs[0].set_ylabel(r'Overlap')
             #plt.legend()
-            axs[1].set_xscale('log')
+            axs[0].set_xscale('log')
             #plt.yscale('log')
-            axs[1].set_ylim([-0.1,1.2])
-            axs[1].grid(axis='both')
-        
+            axs[0].set_ylim([-0.1,1.2])
+            axs[0].grid(axis='both')
+
         # now we want to plot energies of pair states and highlight using overlap
 
 
         minE = 0
         maxE = 0
-    
+
 
 
         cmap0 = matplotlib.colors.LinearSegmentedColormap.from_list('testCmap', colorschemes[self.plot_opts["highlight_idx"] % len(colorschemes)], N=256)
@@ -466,8 +460,6 @@ class analysis_pair_interaction(analysis):
             Rlist = np.append(Rlist, (list(self.rList_um[jj] * np.ones_like(self.energiesAll[jj]))))
             Elist = np.append(Elist, list((self.energiesAll[jj] * 1e-6)))
 
-
-
         # get order of points by overlap to plot points with high overlap on top of points with low overlap
         order = np.argsort(ov)
 
@@ -481,20 +473,54 @@ class analysis_pair_interaction(analysis):
         elif self.plot_opts["ov_norm"] == 'power':
             norm = matplotlib.colors.PowerNorm(gamma=self.plot_opts["gamma"])
 
-        sc = axs[-1].scatter(Rlist[order], Elist[order], s=self.plot_opts["s"], c=ov[order], cmap=cmap0,norm = norm)
-        axs[-1].clb = fig.colorbar(sc, label=r'Overlap', ticks=[0, 0.2, 0.4, 0.6, 0.8, 1],location = self.plot_opts['cb_loc'])
+        self.sampled_energies = []
+        for r in sample_r:
+            # find the index of closest radial separation in self.rList_um
+            assert(self.rList_um[0] <= r and r <= self.rList_um[-1])
+            i = np.searchsorted(Rlist, r)
+            r_closest = Rlist[i]
 
-        axs[-1].set_xlabel(r'$R$ ($\mu$m)')
-        axs[-1].set_ylabel(r'Pair Energy ($h\cdot$MHz)')
-        #plt.legend()
-        #axs[2].set_xscale('log')
-        #plt.yscale('log')
-        axs[-1].set_ylim([1.2*minE,1.2*maxE])
-        axs[-1].grid(axis='both')
-        axs[-1].set_axisbelow(True)
-        
+            candidates = (Rlist == r_closest)
+
+            # find the state of max overlap at this separation
+            j = np.argmax(ov * candidates)
+            # get the energy of that state
+            E_MHz = Elist[j]
+
+            self.sampled_energies.append(E_MHz)
+
+
+        if self.plot_opts["show_overlap"] == True:
+            sc = axs[-1].scatter(Rlist[order], Elist[order], s=self.plot_opts["s"], c=ov[order], cmap=cmap0,norm = norm)
+            axs[-1].clb = fig.colorbar(sc, label=r'Overlap', ticks=[0, 0.2, 0.4, 0.6, 0.8, 1],location = self.plot_opts['cb_loc'])
+
+            axs[-1].set_xlabel(r'$R$ ($\mu$m)')
+            axs[-1].set_ylabel(r'Pair Energy ($h\cdot$MHz)')
+            #plt.legend()
+            #axs[2].set_xscale('log')
+            #plt.yscale('log')
+            axs[-1].set_ylim([1.2*minE,1.2*maxE])
+            axs[-1].grid(axis='both')
+            axs[-1].set_axisbelow(True)
+            axs[-1].set_yscale('symlog')
+            axs[-1].yaxis.set_minor_locator(matplotlib.ticker.SymmetricalLogLocator(linthresh=1e-6, base=10))
+            axs[-1].yaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
+            axs[-1].tick_params(axis='y', which='minor', direction='inout', length=6)
+        else:
+            sc = axs.scatter(Rlist[order], Elist[order], s=self.plot_opts["s"], c=ov[order], cmap=cmap0,norm = norm)
+            axs.clb = fig.colorbar(sc, label=r'Overlap', ticks=[0, 0.2, 0.4, 0.6, 0.8, 1],location = self.plot_opts['cb_loc'])
+
+            axs.set_xlabel(r'$R$ ($\mu$m)')
+            axs.set_ylabel(r'Pair Energy ($h\cdot$MHz)')
+            #plt.legend()
+            #axs[2].set_xscale('log')
+            #plt.yscale('log')
+            axs.set_ylim([1.2*minE,1.2*maxE])
+            axs.grid(axis='both')
+            axs.set_axisbelow(True)
+            axs.set_yscale('symlog')
+            axs.yaxis.set_minor_locator(matplotlib.ticker.SymmetricalLogLocator(linthresh=1e-6, base=10))
+            axs.yaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
+            axs.tick_params(axis='y', which='minor', direction='inout', length=6)
+
         return fig,axs # to allow later figure modification
-            
-    
-        
-        
